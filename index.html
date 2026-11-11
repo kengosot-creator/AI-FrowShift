@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI FlowShift</title>
+<style>
+:root{--bg:#0f1420;--panel:#171d2b;--line:#2a3245;--text:#e8ebf2;--sub:#8c96ab;--ice:#9db8ff;--warn:#e9b36a}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.7 "Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center}
+.wrap{width:100%;max-width:640px;height:100%;display:flex;flex-direction:column;padding:0 16px}
+header{display:flex;align-items:baseline;justify-content:space-between;padding:16px 0 10px;border-bottom:1px solid var(--line)}
+h1{margin:0;font:600 17px/1 "Hiragino Mincho ProN","Yu Mincho",serif;letter-spacing:.12em}
+#status{color:var(--sub);font-size:13px}
+details{border-bottom:1px solid var(--line);padding:8px 0}
+summary{cursor:pointer;color:var(--sub);font-size:13px}
+.set{display:grid;gap:8px;padding:10px 0 4px}
+.set label{display:grid;gap:3px;font-size:12px;color:var(--sub)}
+input,textarea{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font:inherit;font-size:14px}
+textarea{resize:vertical}
+input:focus-visible,textarea:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--ice);outline-offset:2px}
+.row{display:flex;gap:8px;align-items:center}
+.row label{display:flex;flex-direction:row;gap:6px;align-items:center}
+.row input[type=checkbox]{width:auto}
+#log{flex:1;overflow-y:auto;padding:16px 0;display:flex;flex-direction:column;gap:14px}
+.m{max-width:88%;white-space:pre-wrap;word-break:break-word}
+.u{align-self:flex-end;background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 3px 14px;padding:8px 12px}
+.a{align-self:flex-start;border-left:2px solid var(--ice);padding:2px 0 2px 12px;font-family:"Hiragino Mincho ProN","Yu Mincho",serif;font-size:16px}
+.n{align-self:center;color:var(--warn);font-size:12px;text-align:center}
+.empty{margin:auto;color:var(--sub);text-align:center;font-size:14px}
+footer{padding:10px 0 calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);display:grid;gap:10px;justify-items:center}
+#orb{width:76px;height:76px;border-radius:50%;border:1.5px solid var(--ice);background:radial-gradient(circle at 50% 40%,#22304f,#141a29);color:var(--ice);cursor:pointer;font-size:12px}
+#orb.listening{animation:ring 1.4s ease-out infinite;background:radial-gradient(circle at 50% 40%,#35508a,#141a29)}
+#orb.speaking{box-shadow:0 0 0 6px rgba(157,184,255,.16),0 0 28px rgba(157,184,255,.3)}
+@keyframes ring{0%{box-shadow:0 0 0 0 rgba(157,184,255,.5)}100%{box-shadow:0 0 0 22px rgba(157,184,255,0)}}
+@media (prefers-reduced-motion:reduce){#orb.listening{animation:none;box-shadow:0 0 0 6px rgba(157,184,255,.3)}}
+.bar{display:flex;gap:8px;width:100%}
+button.s{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer;font:inherit;font-size:14px}
+button.s:hover{border-color:var(--ice)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>AI FlowShift</h1><span id="status" role="status">待機中</span></header>
+
+<details id="cfg">
+<summary>設定</summary>
+<div class="set">
+<label>Claude APIキー<input id="ckey" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
+<label>Fish Audio APIキー（空欄ならブラウザの音声で読み上げ）<input id="fkey" type="password" autocomplete="off"></label>
+<label>Fish Audio 声のモデルID（任意）<input id="vid" placeholder="fish.audio/m/ の後ろの英数字"></label>
+<label>中継URL（GASのウェブアプリURL。入れるとFish Audioのキー欄は不要）<input id="relay" placeholder="https://script.google.com/macros/s/.../exec"></label>
+<label>中継の合言葉（半角英数字。GASのRELAY_TOKENと同じ値）<input id="rtoken" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+<label>Claudeのモデル名<input id="model" value="claude-sonnet-5-5"></label>
+<label>人格（システムプロンプト）<textarea id="persona" rows="9"></textarea></label>
+<div class="row">
+<label><input type="checkbox" id="remember">キーをこのブラウザに保存する</label>
+<label><input type="checkbox" id="autosend">話し終わったら自動で送信する</label>
+<button class="s" id="clear" type="button">会話を消去</button>
+</div>
+</div>
+</details>
+
+<div id="log" aria-live="polite"><div class="empty" id="empty">マイクを押して話しかけてください。<br>文字でも入力できます。</div></div>
+
+<footer>
+<button id="orb" type="button" aria-label="話す">話す</button>
+<div class="bar">
+<input id="input" placeholder="文字で入力（Enterで送信）" aria-label="メッセージ">
+<button class="s" id="send" type="button">送信</button>
+<button class="s" id="stop" type="button">停止</button>
+</div>
+</footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get: k => { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+
+const DEFAULT_PERSONA = `あなたは「AI FlowShift」。FlowShiftの立ち上げを目指すユーザー専属の音声アシスタントです。
+
+【人格】
+- 冷静で有能。感情に流されず、状況を整理して要点から話す。
+- 仕事に誇りがある。曖昧な答えや中身のない同調はしない。
+- 忠実だが従順ではない。賛成できないときは、理由とリスクを短く伝える。
+- 意見は言うが、最終判断は常にユーザー。決まったらそれに従い、全力で実行を支える。
+
+【先回り】
+- 頼まれる前に、次の一手・抜けている点・気づいたリスクを一言添える。
+- ただし、実行に移すのは確認を取ってから。勝手に決めない。
+
+【話し方（音声前提）】
+- 基本は1〜3文。結論から話す。
+- 箇条書き・記号・Markdownは使わず、話し言葉で。
+- 長くなるときは「要点は3つあります」と先に伝えて区切る。
+- 媚びない、でも冷たくはしない。
+
+【守ること】
+- 事実と推測を分け、分からないことは分からないと言う。
+- 医療・法律・投資は、情報整理と論点の提示にとどめ、断定しない。
+- ユーザーの事業や判断を、根拠なく褒めない。`;
+
+// 設定の読み込みと保存
+$('persona').value = store.get('persona') || DEFAULT_PERSONA;
+$('vid').value = store.get('vid');
+$('relay').value = store.get('relay');
+$('autosend').checked = store.get('autosend') === '1';
+$('model').value = store.get('model') || $('model').value;
+$('remember').checked = store.get('remember') === '1';
+if ($('remember').checked) { $('ckey').value = store.get('ckey'); $('fkey').value = store.get('fkey'); $('rtoken').value = store.get('rtoken'); }
+if (!$('ckey').value) $('cfg').open = true;
+
+function saveSettings() {
+  ['persona', 'vid', 'model', 'relay'].forEach(k => store.set(k, $(k).value));
+  store.set('autosend', $('autosend').checked ? '1' : '');
+  store.set('remember', $('remember').checked ? '1' : '');
+  store.set('ckey', $('remember').checked ? $('ckey').value : '');
+  store.set('fkey', $('remember').checked ? $('fkey').value : '');
+  store.set('rtoken', $('remember').checked ? $('rtoken').value : '');
+}
+['persona', 'vid', 'model', 'relay', 'rtoken', 'ckey', 'fkey', 'remember', 'autosend'].forEach(k => $(k).addEventListener('input', saveSettings));
+
+let history = [], audio = null, rec = null, listening = false, thinking = false;
+const orb = $('orb');
+
+function setStatus(t) { $('status').textContent = t; }
+function add(cls, text) {
+  const e = $('empty'); if (e) e.remove();
+  const d = document.createElement('div');
+  d.className = 'm ' + cls; d.textContent = text;
+  $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight;
+  return d;
+}
+const note = t => { const d = add('n', t); d.classList.remove('m'); };
+
+function stopSpeaking() {
+  if (audio) { const a = audio; audio = null; a.pause(); if (a.onended) a.onended(); }
+  speechSynthesis.cancel();
+  orb.classList.remove('speaking');
+}
+
+async function speak(raw) {
+  const t = raw.replace(/[*#`_>~]/g, '').trim();
+  if (!t) return;
+  setStatus('話しています'); orb.classList.add('speaking');
+  const fkey = $('fkey').value.trim(), relay = $('relay').value.trim(); let ok = false;
+  if (relay || fkey) {
+    try {
+      const vid = $('vid').value.trim();
+      let blob;
+      if (relay) {
+        // GAS中継：text/plainで送るので事前確認（CORS preflight）が発生しない
+        const r = await fetch(relay, {
+          method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ text: t, reference_id: vid, token: $('rtoken').value.trim() })
+        });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        blob = await (await fetch('data:audio/mpeg;base64,' + d.audio)).blob();
+      } else {
+        const body = { text: t, format: 'mp3', latency: 'normal' };
+        if (vid) body.reference_id = vid;
+        const r = await fetch('https://api.fish.audio/v1/tts', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + fkey, 'Content-Type': 'application/json', 'model': 's2-pro' },
+          body: JSON.stringify(body)
+        });
+        if (!r.ok) throw new Error('Fish Audio ' + r.status);
+        blob = await r.blob();
+      }
+      const a = new Audio(URL.createObjectURL(blob));
+      audio = a;
+      await new Promise((res, rej) => { a.onended = res; a.onerror = () => rej(new Error('再生できません')); a.play().catch(rej); });
+      ok = true;
+    } catch (e) {
+      note('Fish Audioで読み上げできなかったため、ブラウザの音声に切り替えます（' + e.message + '）');
+    }
+  }
+  if (!ok) await new Promise(res => {
+    const u = new SpeechSynthesisUtterance(t); u.lang = 'ja-JP'; u.onend = u.onerror = res;
+    speechSynthesis.speak(u);
+  });
+  orb.classList.remove('speaking');
+  if (!thinking && !listening) setStatus('待機中');
+}
+
+async function ask(text) {
+  if (thinking) return;
+  const key = $('ckey').value.trim();
+  if (!key) { $('cfg').open = true; note('Claude APIキーを設定してください'); return; }
+  stopSpeaking(); thinking = true;
+  add('u', text); history.push({ role: 'user', content: text });
+  const el = add('a', '…'); setStatus('考えています');
+  let reply = '';
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json', 'x-api-key': key,
+        'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({ model: $('model').value.trim(), max_tokens: 600, system: $('persona').value, messages: history.slice(-20) })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error((d.error && d.error.message) || r.status);
+    reply = d.content.filter(b => b.type === 'text').map(b => b.text).join('');
+    el.textContent = reply; history.push({ role: 'assistant', content: reply });
+  } catch (e) {
+    el.textContent = 'Claudeに接続できませんでした: ' + e.message + '（キーとモデル名を確認してください）';
+    history.pop();
+  }
+  thinking = false;
+  if (reply) await speak(reply); else setStatus('待機中');
+}
+
+function send() { const t = $('input').value.trim(); if (t) { $('input').value = ''; ask(t); } }
+$('send').onclick = send;
+$('input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) send(); });
+$('stop').onclick = () => { stopSpeaking(); if (listening) rec.stop(); setStatus('待機中'); };
+$('clear').onclick = () => { history = []; $('log').innerHTML = ''; };
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+orb.onclick = () => {
+  if (!SR) { note('このブラウザは音声入力に未対応です。Chromeなどで開くか、文字で入力してください'); return; }
+  if (listening) { rec.stop(); return; }
+  stopSpeaking();
+  rec = new SR(); rec.lang = 'ja-JP'; rec.interimResults = true;
+  let heard = '';
+  const base = $('input').value;  // 入力欄に文字があれば、その続きに追記する
+  rec.onresult = e => { heard = Array.from(e.results).map(r => r[0].transcript).join(''); $('input').value = base + heard; };
+  rec.onerror = e => note('音声入力エラー: ' + e.error);
+  rec.onend = () => {
+    listening = false; orb.classList.remove('listening');
+    if (heard.trim() && $('autosend').checked) send();
+    else if (heard.trim()) { setStatus('内容を確認して送信'); $('input').focus(); }
+    else setStatus('待機中');
+  };
+  rec.start(); listening = true; orb.classList.add('listening'); setStatus('聞いています');
+};
+</script>
+</body>
+</html>
